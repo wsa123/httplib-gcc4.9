@@ -10,7 +10,6 @@ on:
 env:
   TOOLCHAIN_DIR: /opt/gcc-linaro-4.9-2016.02-x86_64_arm-linux-gnueabihf
   CROSS_PREFIX: arm-linux-gnueabihf
-  OPENSSL_VERSION: 1.0.0
   BUILD_DIR: ${{ github.workspace }}/build/arm
   INSTALL_DIR: ${{ github.workspace }}/install
 
@@ -56,122 +55,16 @@ jobs:
           rm -f "$TOOLCHAIN_TAR"
           echo "Toolchain installed to: ${TOOLCHAIN_DIR}"
 
-      # 验证工具链
       - name: Verify toolchain
         run: |
           echo "=== GCC version ==="
           ${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}-g++ --version
-          echo "=== Sysroot ==="
-          ls ${TOOLCHAIN_DIR}/${CROSS_PREFIX}/libc/usr/include/ 2>/dev/null || echo "(minimal sysroot)"
 
       # ============================================================
-      # 4. 交叉编译 OpenSSL
-      # ============================================================
-      - name: Cache OpenSSL build
-        id: cache-openssl
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${TOOLCHAIN_DIR}/${CROSS_PREFIX}/libc/usr/include/openssl
-            ${TOOLCHAIN_DIR}/${CROSS_PREFIX}/libc/usr/lib/libssl*
-            ${TOOLCHAIN_DIR}/${CROSS_PREFIX}/libc/usr/lib/libcrypto*
-            ${TOOLCHAIN_DIR}/${CROSS_PREFIX}/libc/lib/libssl*
-            ${TOOLCHAIN_DIR}/${CROSS_PREFIX}/libc/lib/libcrypto*
-          key: openssl-${OPENSSL_VERSION}-linaro-4.9-armhf-v2
-
-      - name: Download and compile OpenSSL
-        if: steps.cache-openssl.outputs.cache-hit != 'true'
-        run: |
-          echo "=== Downloading OpenSSL ${OPENSSL_VERSION} ==="
-          # OpenSSL 1.0.0 官方已迁移到 openssl-library.org / GitHub
-          # 尝试多个镜像源，直到成功
-          OPENSSL_URLS=(
-            "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
-            "https://ftp.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
-            "https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_1_0_0.tar.gz"
-          )
-          DOWNLOAD_OK=0
-          for URL in "${OPENSSL_URLS[@]}"; do
-            echo "Trying: $URL"
-            if wget --timeout=30 --tries=3 "$URL" 2>&1; then
-              DOWNLOAD_OK=1
-              echo "Downloaded: $(ls openssl-*.tar.gz OpenSSL_*.tar.gz 2>/dev/null)"
-              break
-            fi
-            echo "Failed, trying next mirror..."
-          done
-          if [ "$DOWNLOAD_OK" = "0" ]; then
-            echo "ERROR: All download mirrors failed!"
-            exit 1
-          fi
-
-          # 解压（GitHub archive 和 官方 tarball 目录名不同）
-          for f in openssl-*.tar.gz OpenSSL_*.tar.gz; do
-            [ -f "$f" ] && tar xzf "$f" && break
-          done
-          # 统一目录名
-          if [ -d "openssl-OpenSSL_1_0_0" ]; then
-            mv openssl-OpenSSL_1_0_0 "openssl-${OPENSSL_VERSION}"
-          fi
-          cd "openssl-${OPENSSL_VERSION}"
-
-          SYSROOT="${TOOLCHAIN_DIR}/${CROSS_PREFIX}/libc"
-          PREFIX="${SYSROOT}/usr"
-
-          # 确保目录存在
-          sudo mkdir -p "${PREFIX}"
-
-          # OpenSSL 1.0.0 的 make depend 需要交叉编译器在 PATH 中
-          export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
-
-          echo "=== Configuring OpenSSL 1.0.0 for arm-linux-gnueabihf ==="
-          # OpenSSL 1.0.x ./Configure 参数说明:
-          #   linux-armv4       → ARMv4 以上目标 (ARM32)
-          #   no-asm            → 跳过汇编优化 (避免 ARM 汇编语法兼容问题)
-          #   no-shared         → 静态库 (避免运行时 .so 搜索路径问题)
-          #   no-ssl2 no-ssl3   → 禁用已废弃的 SSL2/SSL3 协议
-          #   --cross-compile-prefix → 交叉编译器前缀
-          #   --openssldir       → 运行时配置目录
-          #
-          # 注意: 1.0.0 没有 install_sw 目标，直接用 make install
-          ./Configure linux-armv4 \
-            no-asm \
-            no-shared \
-            no-ssl2 \
-            no-ssl3 \
-            --cross-compile-prefix="${CROSS_PREFIX}-" \
-            --prefix="${PREFIX}" \
-            --openssldir="${PREFIX}/ssl"
-
-          echo "=== Building OpenSSL ==="
-          make -j$(nproc) depend
-          # 子 make 不继承 export PATH，必须显式传递
-          PATH="${TOOLCHAIN_DIR}/bin:${PATH}" make -j$(nproc) build_crypto build_ssl
-
-          echo "=== Installing OpenSSL to sysroot ==="
-          sudo make install  # 1.0.0 没有 install_sw，直接用 install
-
-          cd ..
-          rm -rf "openssl-${OPENSSL_VERSION}" "openssl-${OPENSSL_VERSION}.tar.gz"
-
-          echo "=== Verifying installation ==="
-          echo "--- Headers ---"
-          ls "${PREFIX}/include/openssl/" | head -10
-          echo "--- Libraries ---"
-          ls -la "${PREFIX}/lib/libssl"* "${PREFIX}/lib/libcrypto"* 2>/dev/null
-
-          # 某些工具链的 GCC 也在 ${SYSROOT}/lib/ 下搜索
-          # 确认库文件在标准搜索路径中
-          echo "--- Check sysroot lib search path ---"
-          ${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}-gcc -print-search-dirs | grep libraries
-
-      # ============================================================
-      # 5. 生成 CMake 工具链文件
+      # 4. 生成 CMake 工具链文件
       # ============================================================
       - name: Generate CMake toolchain file
         run: |
-          SYSROOT="${TOOLCHAIN_DIR}/${CROSS_PREFIX}/libc"
-
           cat > "${GITHUB_WORKSPACE}/toolchain-armhf.cmake" << 'TOOLCHAIN_EOF'
           # ==========================================
           # CMake 交叉编译工具链: arm-linux-gnueabihf
@@ -179,7 +72,6 @@ jobs:
           set(CMAKE_SYSTEM_NAME Linux)
           set(CMAKE_SYSTEM_PROCESSOR arm)
 
-          # Linaro GCC 4.9 工具链
           set(TOOLCHAIN_DIR $ENV{TOOLCHAIN_DIR})
           set(CROSS_PREFIX   $ENV{CROSS_PREFIX})
 
@@ -192,7 +84,6 @@ jobs:
           set(CMAKE_RANLIB       ${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}-ranlib)
           set(CMAKE_STRIP        ${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}-strip)
 
-          # Sysroot
           set(CMAKE_SYSROOT ${TOOLCHAIN_DIR}/${CROSS_PREFIX}/libc)
           set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
           set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
@@ -204,7 +95,7 @@ jobs:
           cat "${GITHUB_WORKSPACE}/toolchain-armhf.cmake"
 
       # ============================================================
-      # 6. CMake 配置
+      # 5. CMake 配置（仅 HTTP，不依赖 OpenSSL）
       # ============================================================
       - name: CMake configure
         run: |
@@ -213,17 +104,18 @@ jobs:
                 -G "Unix Makefiles" \
                 -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/toolchain-armhf.cmake" \
                 -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_CXX_FLAGS="-DCPPHTTPLIB_OPENSSL_SUPPORT=0" \
                 -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}"
 
       # ============================================================
-      # 7. 编译
+      # 6. 编译
       # ============================================================
       - name: Build
         run: |
           cmake --build "${BUILD_DIR}" -- -j$(nproc) VERBOSE=1
 
       # ============================================================
-      # 8. 验证产物
+      # 7. 验证产物架构
       # ============================================================
       - name: Verify binary
         run: |
@@ -241,12 +133,10 @@ jobs:
           fi
 
       # ============================================================
-      # 9. 收集产物
+      # 8. 打包上传
       # ============================================================
-      - name: Install artifacts
+      - name: Collect artifacts
         run: |
-          cmake --install "${BUILD_DIR}" --prefix "${INSTALL_DIR}" || true
-          # 手动收集所有产出
           mkdir -p "${INSTALL_DIR}/bin" "${INSTALL_DIR}/lib"
           find "${BUILD_DIR}" -type f -executable -exec cp {} "${INSTALL_DIR}/bin/" \; 2>/dev/null || true
           find "${BUILD_DIR}" -name "*.a" -exec cp {} "${INSTALL_DIR}/lib/" \; 2>/dev/null || true
