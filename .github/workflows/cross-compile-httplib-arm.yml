@@ -83,9 +83,36 @@ jobs:
         if: steps.cache-openssl.outputs.cache-hit != 'true'
         run: |
           echo "=== Downloading OpenSSL ${OPENSSL_VERSION} ==="
-          # OpenSSL 1.0.0 在 old/ 目录下
-          wget -q --show-progress "https://www.openssl.org/source/old/${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
-          tar xzf "openssl-${OPENSSL_VERSION}.tar.gz"
+          # OpenSSL 1.0.0 官方已迁移到 openssl-library.org / GitHub
+          # 尝试多个镜像源，直到成功
+          OPENSSL_URLS=(
+            "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
+            "https://ftp.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
+            "https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_1_0_0.tar.gz"
+          )
+          DOWNLOAD_OK=0
+          for URL in "${OPENSSL_URLS[@]}"; do
+            echo "Trying: $URL"
+            if wget --timeout=30 --tries=3 "$URL" 2>&1; then
+              DOWNLOAD_OK=1
+              echo "Downloaded: $(ls openssl-*.tar.gz OpenSSL_*.tar.gz 2>/dev/null)"
+              break
+            fi
+            echo "Failed, trying next mirror..."
+          done
+          if [ "$DOWNLOAD_OK" = "0" ]; then
+            echo "ERROR: All download mirrors failed!"
+            exit 1
+          fi
+
+          # 解压（GitHub archive 和 官方 tarball 目录名不同）
+          for f in openssl-*.tar.gz OpenSSL_*.tar.gz; do
+            [ -f "$f" ] && tar xzf "$f" && break
+          done
+          # 统一目录名
+          if [ -d "openssl-OpenSSL_1_0_0" ]; then
+            mv openssl-OpenSSL_1_0_0 "openssl-${OPENSSL_VERSION}"
+          fi
           cd "openssl-${OPENSSL_VERSION}"
 
           SYSROOT="${TOOLCHAIN_DIR}/${CROSS_PREFIX}/libc"
