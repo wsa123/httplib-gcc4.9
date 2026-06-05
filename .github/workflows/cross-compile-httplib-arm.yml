@@ -30,13 +30,11 @@ jobs:
           wget -q https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.18.3/httplib.h \
             -O build/armhf/include/httplib.h
 
-      - name: Cross-compile httplib as static library (.a)
+      - name: Cross-compile httplib as shared library (.so)
         run: |
 
-          # 用 dummy 编译单元触发模板实例化，生成 libhttplib.a
           cat > build/httplib_compile.cpp << 'EOF'
-          // 仅用于实例化 httplib 模板并编译为静态库
-          # 不定义 CPPHTTPLIB_OPENSSL_SUPPORT => 仅 HTTP
+          // Instantiate httplib templates for shared library (HTTP only, no OpenSSL)
           #include "httplib.h"
 
           void httplib_instantiate() {
@@ -55,16 +53,21 @@ jobs:
             -mfloat-abi=hard \
             -std=c++11 \
             -pthread \
+            -fPIC \
             -O2 \
             -o build/httplib_compile.o
 
-          arm-linux-gnueabihf-ar rcs build/armhf/lib/libhttplib.a build/httplib_compile.o
+          arm-linux-gnueabihf-g++ -shared \
+            -o build/armhf/lib/libhttplib.so \
+            build/httplib_compile.o \
+            -pthread
 
           echo "=== Build artifacts ==="
           ls -lh build/armhf/include/
           ls -lh build/armhf/lib/
+          file build/armhf/lib/libhttplib.so
 
-      - name: Upload httplib artifact (headers + .a)
+      - name: Upload httplib artifact (headers + .so)
         uses: actions/upload-artifact@v4
         with:
           name: httplib-armhf-http-only
