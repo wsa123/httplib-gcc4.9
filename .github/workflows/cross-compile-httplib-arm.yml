@@ -120,7 +120,7 @@ jobs:
 
           # 确保目录存在
           sudo mkdir -p "${PREFIX}"
-
+          export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
           echo "=== Configuring OpenSSL 1.0.0 for arm-linux-gnueabihf ==="
           # OpenSSL 1.0.x ./Configure 参数说明:
           #   linux-armv4       → ARMv4 以上目标 (ARM32)
