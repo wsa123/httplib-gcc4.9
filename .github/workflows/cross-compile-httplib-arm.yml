@@ -3,8 +3,6 @@ name: Cross Compile httplib (ARM, HTTP only)
 on:
   push:
     branches: [main, master]
-    paths:
-      - '.github/workflows/httplib-cross-compile.yml'
   workflow_dispatch:
 
 jobs:
@@ -12,200 +10,63 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # ============================================================
-      # Step 1: 安装 gcc-linaro-4.9 ARM32 交叉编译工具链
-      # ============================================================
       - name: Install Linaro GCC 4.9 cross-compiler
         run: |
-          # 创建工具链目录
           sudo mkdir -p /opt/toolchain
-
-          # 下载 gcc-linaro-4.9-2016.02-x86_64_arm-linux-gnueabihf
           cd /opt/toolchain
-          
-          wget -q --no-check-certificate \
+          wget -q \
             https://releases.linaro.org/components/toolchain/binaries/4.9-2016.02/arm-linux-gnueabihf/gcc-linaro-4.9-2016.02-x86_64_arm-linux-gnueabihf.tar.xz \
             -O linaro-toolchain.tar.xz
-
           tar xf linaro-toolchain.tar.xz
-
-          # 将工具链加入 PATH
           echo "/opt/toolchain/gcc-linaro-4.9-2016.02-x86_64_arm-linux-gnueabihf/bin" >> $GITHUB_PATH
 
-      # ============================================================
-      # Step 2: 验证交叉编译器可用
-      # ============================================================
       - name: Verify cross-compiler
         run: |
-          arm-linux-gnueabihf-gcc --version
           arm-linux-gnueabihf-g++ --version
 
-      # ============================================================
-      # Step 3: 获取 cpp-httplib (仅头文件, 仅HTTP)
-      # ============================================================
       - name: Download cpp-httplib header-only library
         run: |
-          mkdir -p httplib-src
-          cd httplib-src
-
-          # 下载 cpp-httplib v0.18.3 (稳定版本，兼容 C++11/GCC 4.8+)
+          mkdir -p build/armhf/include
           wget -q https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.18.3/httplib.h \
-            -O httplib.h
+            -O build/armhf/include/httplib.h
 
-          echo "=== httplib.h downloaded ==="
-          head -30 httplib.h
-
-      # ============================================================
-      # Step 4: 编写仅 HTTP 的测试程序
-      # ============================================================
-      - name: Create test source (HTTP only)
+      - name: Cross-compile httplib as static library (.a)
         run: |
-          cat > test_httplib_http.cpp << 'EOF'
-          // ================================================================
-          // 测试程序：验证 cpp-httplib 在 ARM32 上的交叉编译（仅 HTTP）
-          // 注意：不定义 CPPHTTPLIB_OPENSSL_SUPPORT，即不支持 HTTPS
-          // ================================================================
 
+          # 用 dummy 编译单元触发模板实例化，生成 libhttplib.a
+          cat > build/httplib_compile.cpp << 'EOF'
+          // 仅用于实例化 httplib 模板并编译为静态库
+          # 不定义 CPPHTTPLIB_OPENSSL_SUPPORT => 仅 HTTP
           #include "httplib.h"
-          #include <iostream>
-          #include <string>
 
-          int main() {
-              // ---- 客户端：发起 GET 请求 ----
-              httplib::Client cli("http://example.com", 80);
-
-              // 设置连接超时 (秒)
-              cli.set_connection_timeout(5);
-
-              // 设置读取超时 (秒)
-              cli.set_read_timeout(10);
-
-              std::cout << "[HTTP Client] Created client for http://example.com" << std::endl;
-
-              // ---- 服务端：创建简单的 HTTP Server ----
+          void httplib_instantiate() {
+              httplib::Client cli("http://localhost", 80);
               httplib::Server svr;
-
-              // 注册路由: GET /hello
-              svr.Get("/hello", [](const httplib::Request& req, httplib::Response& res) {
-                  res.set_content("Hello from ARM32!", "text/plain");
-              });
-
-              // 注册路由: POST /echo
-              svr.Post("/echo", [](const httplib::Request& req, httplib::Response& res) {
-                  res.set_content(req.body, "text/plain");
-              });
-
-              // 注册路由: GET /headers (打印请求头)
-              svr.Get("/headers", [](const httplib::Request& req, httplib::Response& res) {
-                  std::string result = "Request Headers:\n";
-                  for (auto it : req.headers) {
-                      result += it.first + ": " + it.second + "\n";
-                  }
-                  res.set_content(result, "text/plain");
-              });
-
-              // 注册路由: GET /query (解析查询参数)
-              svr.Get("/query", [](const httplib::Request& req, httplib::Response& res) {
-                  auto name = req.get_param_value("name");
-                  auto value = req.get_param_value("value");
-                  std::string result = "name=" + name + ", value=" + value;
-                  res.set_content(result, "text/plain");
-              });
-
-              std::cout << "[HTTP Server] Routes registered: /hello, /echo, /headers, /query" << std::endl;
-              std::cout << "[INFO] Cross-compilation test passed! (HTTP only, no OpenSSL)" << std::endl;
-
-              return 0;
+              (void)cli;
+              (void)svr;
           }
           EOF
 
-          echo "=== Test source created ==="
-          cat test_httplib_http.cpp
-
-      # ============================================================
-      # Step 5: 使用 Linaro GCC 4.9 交叉编译（静态链接）
-      # ============================================================
-      - name: Cross-compile with Linaro GCC 4.9 (static link)
-        run: |
-          cd httplib-src
-
-          # 交叉编译参数说明：
-          #   -march=armv7-a     : 目标 CPU 架构 (Cortex-A7/A8/A9/A15)
-          #   -mfpu=neon-vfpv4   : 启用 NEON + VFPv4 FPU (硬浮点)
-          #   -mfloat-abi=hard   : 硬浮点调用约定 (匹配 gnueabihf)
-          #   -static            : 全部静态链接，避免目标板缺少动态库
-          #   -std=c++11         : cpp-httplib 需要 C++11 或更高
-          #   -pthread           : httplib 内部使用多线程
-          #   不定义 CPPHTTPLIB_OPENSSL_SUPPORT => 仅支持 HTTP
-
-          arm-linux-gnueabihf-g++ \
-            -o test_httplib_arm \
-            test_httplib_http.cpp \
+          arm-linux-gnueabihf-g++ -c \
+            build/httplib_compile.cpp \
+            -I build/armhf/include \
             -march=armv7-a \
             -mfpu=neon-vfpv4 \
             -mfloat-abi=hard \
-            -static \
             -std=c++11 \
             -pthread \
             -O2 \
-            -Wall
+            -o build/httplib_compile.o
 
-          echo ""
-          echo "==========================================="
-          echo "  CROSS-COMPILATION SUCCESSFUL!"
-          echo "==========================================="
-          echo ""
+          arm-linux-gnueabihf-ar rcs build/armhf/lib/libhttplib.a build/httplib_compile.o
 
-      # ============================================================
-      # Step 6: 验证产物信息
-      # ============================================================
-      - name: Verify build artifact
-        run: |
-          cd httplib-src
+          echo "=== Build artifacts ==="
+          ls -lh build/armhf/include/
+          ls -lh build/armhf/lib/
 
-          echo "=== File info ==="
-          file test_httplib_arm
-          ls -lh test_httplib_arm
-
-          echo ""
-          echo "=== ELF header check (should be ARM) ==="
-          readelf -h test_httplib_arm | grep -E "(Machine|Type|Entry)"
-
-          echo ""
-          echo "=== Dynamic dependencies check (none expected due to -static) ==="
-          readelf -d test_httplib_arm 2>/dev/null || echo "(No dynamic section - fully static)"
-
-          echo ""
-          echo "=== Symbol check (httplib symbols present) ==="
-          nm test_httplib_arm | grep -i httplib | head -20 || true
-
-      # ============================================================
-      # Step 7: 上传构建产物
-      # ============================================================
-      - name: Upload ARM binary artifact
+      - name: Upload httplib artifact (headers + .a)
         uses: actions/upload-artifact@v4
         with:
-          name: httplib-armhf-http-only-bin
-          path: httplib-src/test_httplib_arm
+          name: httplib-armhf-http-only
+          path: build/armhf/
           retention-days: 30
-
-      # ============================================================
-      # Step 8: 汇总结果
-      # ============================================================
-      - name: Summary
-        run: |
-          echo "## Cross-Compile Result" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Toolchain** | gcc-linaro-4.9-2016.02-x86_64_arm-linux-gnueabihf |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Target** | arm-linux-gnueabihf (ARMv7-A, hard-float) |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Library** | cpp-httplib v0.18.3 (header-only) |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Protocol** | HTTP only (no OpenSSL/HTTPS) |" >> $GITHUB_STEP_SUMMARY
-          echo "| **C++ Standard** | C++11 |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Linking** | Static (-static) |" >> $GITHUB_STEP_SUMMARY
-          echo "| **FPU** | NEON-VFPv4 (hard float) |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Status** | :white_check_mark: Success |" >> $GITHUB_STEP_SUMMARY
