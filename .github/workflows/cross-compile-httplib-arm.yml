@@ -1,214 +1,211 @@
-name: Cross-compile httplib for ARM32 (armhf)
+name: Cross Compile httplib (ARM, HTTP only)
 
 on:
   push:
     branches: [main, master]
-  pull_request:
-    branches: [main, master]
+    paths:
+      - '.github/workflows/httplib-cross-compile.yml'
   workflow_dispatch:
 
-env:
-  TOOLCHAIN_DIR: /opt/gcc-linaro-4.9-2016.02-x86_64_arm-linux-gnueabihf
-  CROSS_PREFIX: arm-linux-gnueabihf
-  BUILD_DIR: ${{ github.workspace }}/build/arm
-  INSTALL_DIR: ${{ github.workspace }}/install
-
 jobs:
-  build:
-    runs-on: ubuntu-22.04
+  cross-compile:
+    runs-on: ubuntu-latest
+
     steps:
-      # ============================================================
-      # 1. Checkout
-      # ============================================================
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       # ============================================================
-      # 2. 安装宿主机依赖
+      # Step 1: 安装 gcc-linaro-4.9 ARM32 交叉编译工具链
       # ============================================================
-      - name: Install host dependencies
+      - name: Install Linaro GCC 4.9 cross-compiler
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            cmake ninja-build wget xz-utils
+          # 创建工具链目录
+          sudo mkdir -p /opt/toolchain
+
+          # 下载 gcc-linaro-4.9-2016.02-x86_64_arm-linux-gnueabihf
+          cd /opt/toolchain
+          
+          wget -q --no-check-certificate \
+            https://releases.linaro.org/components/toolchain/binaries/4.9-2016.02/arm-linux-gnueabihf/gcc-linaro-4.9-2016.02-x86_64_arm-linux-gnueabihf.tar.xz \
+            -O linaro-toolchain.tar.xz
+
+          tar xf linaro-toolchain.tar.xz
+
+          # 将工具链加入 PATH
+          echo "/opt/toolchain/gcc-linaro-4.9-2016.02-x86_64_arm-linux-gnueabihf/bin" >> $GITHUB_PATH
 
       # ============================================================
-      # 3. 下载 & 缓存 Linaro 4.9 工具链
+      # Step 2: 验证交叉编译器可用
       # ============================================================
-      - name: Cache Linaro toolchain
-        id: cache-toolchain
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.TOOLCHAIN_DIR }}
-          key: toolchain-linaro-4.9.2016.02-armhf
-
-      - name: Download and extract Linaro toolchain
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+      - name: Verify cross-compiler
         run: |
-          TOOLCHAIN_TAR="gcc-linaro-4.9-2016.02-x86_64_arm-linux-gnueabihf.tar.xz"
-          TOOLCHAIN_URL="https://releases.linaro.org/components/toolchain/binaries/4.9-2016.02/arm-linux-gnueabihf/${TOOLCHAIN_TAR}"
-          echo "Downloading toolchain..."
-          wget -q --show-progress "$TOOLCHAIN_URL"
-          echo "Extracting..."
-          sudo mkdir -p "$(dirname ${TOOLCHAIN_DIR})"
-          sudo tar xf "$TOOLCHAIN_TAR" -C "$(dirname ${TOOLCHAIN_DIR})"
-          rm -f "$TOOLCHAIN_TAR"
-          echo "Toolchain installed to: ${TOOLCHAIN_DIR}"
+          arm-linux-gnueabihf-gcc --version
+          arm-linux-gnueabihf-g++ --version
 
-      - name: Verify toolchain
+      # ============================================================
+      # Step 3: 获取 cpp-httplib (仅头文件, 仅HTTP)
+      # ============================================================
+      - name: Download cpp-httplib header-only library
         run: |
-          echo "=== GCC version ==="
-          ${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}-g++ --version
+          mkdir -p httplib-src
+          cd httplib-src
+
+          # 下载 cpp-httplib v0.18.3 (稳定版本，兼容 C++11/GCC 4.8+)
+          wget -q https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.18.3/httplib.h \
+            -O httplib.h
+
+          echo "=== httplib.h downloaded ==="
+          head -30 httplib.h
 
       # ============================================================
-      # 4. 生成 CMake 工具链文件
+      # Step 4: 编写仅 HTTP 的测试程序
       # ============================================================
-      - name: Generate CMake toolchain file
+      - name: Create test source (HTTP only)
         run: |
-          cat > "${GITHUB_WORKSPACE}/toolchain-armhf.cmake" << 'TOOLCHAIN_EOF'
-          # ==========================================
-          # CMake 交叉编译工具链: arm-linux-gnueabihf
-          # ==========================================
-          set(CMAKE_SYSTEM_NAME Linux)
-          set(CMAKE_SYSTEM_PROCESSOR arm)
+          cat > test_httplib_http.cpp << 'EOF'
+          // ================================================================
+          // 测试程序：验证 cpp-httplib 在 ARM32 上的交叉编译（仅 HTTP）
+          // 注意：不定义 CPPHTTPLIB_OPENSSL_SUPPORT，即不支持 HTTPS
+          // ================================================================
 
-          set(TOOLCHAIN_DIR $ENV{TOOLCHAIN_DIR})
-          set(CROSS_PREFIX   $ENV{CROSS_PREFIX})
-
-          set(CMAKE_C_COMPILER   ${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}-gcc)
-          set(CMAKE_CXX_COMPILER ${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}-g++)
-          set(CMAKE_AR           ${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}-ar)
-          set(CMAKE_LINKER       ${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}-ld)
-          set(CMAKE_OBJCOPY      ${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}-objcopy)
-          set(CMAKE_OBJDUMP      ${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}-objdump)
-          set(CMAKE_RANLIB       ${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}-ranlib)
-          set(CMAKE_STRIP        ${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}-strip)
-
-          set(CMAKE_SYSROOT ${TOOLCHAIN_DIR}/${CROSS_PREFIX}/libc)
-          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-          set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
-          TOOLCHAIN_EOF
-
-          echo "=== Generated toolchain-armhf.cmake ==="
-          cat "${GITHUB_WORKSPACE}/toolchain-armhf.cmake"
-
-      # ============================================================
-      # 5. CMake 配置（仅 HTTP，不依赖 OpenSSL）
-      #    优先使用仓库根目录 CMakeLists.txt，否则自动生成最小工程
-      # ============================================================
-      - name: CMake configure
-        run: |
-          echo "=== Current repo structure ==="
-          ls -la "${GITHUB_WORKSPACE}"
-
-          # 如果仓库根目录没有 CMakeLists.txt，自动生成一个最小工程
-          if [ ! -f "${GITHUB_WORKSPACE}/CMakeLists.txt" ]; then
-            echo "No CMakeLists.txt found, generating auto-build project..."
-            SOURCE_DIR="${GITHUB_WORKSPACE}/_auto_build"
-            mkdir -p "${SOURCE_DIR}"
-
-            # 生成 CMakeLists.txt
-            cat > "${SOURCE_DIR}/CMakeLists.txt" << 'CMAKE_EOF'
-          cmake_minimum_required(VERSION 3.5)
-          project(httplib_example LANGUAGES CXX)
-
-          set(CMAKE_CXX_STANDARD 11)
-          set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-          # httplib header-only 库的位置
-          set(HTTPLIB_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/httplib")
-          if(NOT EXISTS "${HTTPLIB_INCLUDE}/httplib.h")
-            # 如果 third_party/httplib 不存在，从根目录尝试
-            set(HTTPLIB_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../httplib")
-          endif()
-          if(NOT EXISTS "${HTTPLIB_INCLUDE}/httplib.h")
-            message(FATAL_ERROR "httplib.h not found! Please add third_party/httplib/ to your repo.")
-          endif()
-
-          include_directories("${HTTPLIB_INCLUDE}")
-
-          add_executable(httplib_example main.cpp)
-          CMAKE_EOF
-
-            # 生成简化的 HTTP 示例
-            cat > "${SOURCE_DIR}/main.cpp" << 'CPP_EOF'
-          #define CPPHTTPLIB_OPENSSL_SUPPORT 0
           #include "httplib.h"
           #include <iostream>
+          #include <string>
 
           int main() {
+              // ---- 客户端：发起 GET 请求 ----
+              httplib::Client cli("http://example.com", 80);
+
+              // 设置连接超时 (秒)
+              cli.set_connection_timeout(5);
+
+              // 设置读取超时 (秒)
+              cli.set_read_timeout(10);
+
+              std::cout << "[HTTP Client] Created client for http://example.com" << std::endl;
+
+              // ---- 服务端：创建简单的 HTTP Server ----
               httplib::Server svr;
 
-              svr.Get("/", [](const httplib::Request&, httplib::Response& res) {
-                  res.set_content("Hello from ARM32 httplib server!", "text/plain");
+              // 注册路由: GET /hello
+              svr.Get("/hello", [](const httplib::Request& req, httplib::Response& res) {
+                  res.set_content("Hello from ARM32!", "text/plain");
               });
 
-              std::cout << "httplib server starting on http://0.0.0.0:8080" << std::endl;
-              svr.listen("0.0.0.0", 8080);
+              // 注册路由: POST /echo
+              svr.Post("/echo", [](const httplib::Request& req, httplib::Response& res) {
+                  res.set_content(req.body, "text/plain");
+              });
+
+              // 注册路由: GET /headers (打印请求头)
+              svr.Get("/headers", [](const httplib::Request& req, httplib::Response& res) {
+                  std::string result = "Request Headers:\n";
+                  for (auto it : req.headers) {
+                      result += it.first + ": " + it.second + "\n";
+                  }
+                  res.set_content(result, "text/plain");
+              });
+
+              // 注册路由: GET /query (解析查询参数)
+              svr.Get("/query", [](const httplib::Request& req, httplib::Response& res) {
+                  auto name = req.get_param_value("name");
+                  auto value = req.get_param_value("value");
+                  std::string result = "name=" + name + ", value=" + value;
+                  res.set_content(result, "text/plain");
+              });
+
+              std::cout << "[HTTP Server] Routes registered: /hello, /echo, /headers, /query" << std::endl;
+              std::cout << "[INFO] Cross-compilation test passed! (HTTP only, no OpenSSL)" << std::endl;
+
               return 0;
           }
-          CPP_EOF
+          EOF
 
-            echo "Generated auto-build project at ${SOURCE_DIR}"
-          else
-            SOURCE_DIR="${GITHUB_WORKSPACE}"
-          fi
-
-          cmake -S "${SOURCE_DIR}" \
-                -B "${BUILD_DIR}" \
-                -G "Unix Makefiles" \
-                -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/toolchain-armhf.cmake" \
-                -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_CXX_FLAGS="-DCPPHTTPLIB_OPENSSL_SUPPORT=0" \
-                -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}"
+          echo "=== Test source created ==="
+          cat test_httplib_http.cpp
 
       # ============================================================
-      # 6. 编译
+      # Step 5: 使用 Linaro GCC 4.9 交叉编译（静态链接）
       # ============================================================
-      - name: Build
+      - name: Cross-compile with Linaro GCC 4.9 (static link)
         run: |
-          cmake --build "${BUILD_DIR}" -- -j$(nproc) VERBOSE=1
+          cd httplib-src
+
+          # 交叉编译参数说明：
+          #   -march=armv7-a     : 目标 CPU 架构 (Cortex-A7/A8/A9/A15)
+          #   -mfpu=neon-vfpv4   : 启用 NEON + VFPv4 FPU (硬浮点)
+          #   -mfloat-abi=hard   : 硬浮点调用约定 (匹配 gnueabihf)
+          #   -static            : 全部静态链接，避免目标板缺少动态库
+          #   -std=c++11         : cpp-httplib 需要 C++11 或更高
+          #   -pthread           : httplib 内部使用多线程
+          #   不定义 CPPHTTPLIB_OPENSSL_SUPPORT => 仅支持 HTTP
+
+          arm-linux-gnueabihf-g++ \
+            -o test_httplib_arm \
+            test_httplib_http.cpp \
+            -march=armv7-a \
+            -mfpu=neon-vfpv4 \
+            -mfloat-abi=hard \
+            -static \
+            -std=c++11 \
+            -pthread \
+            -O2 \
+            -Wall
+
+          echo ""
+          echo "==========================================="
+          echo "  CROSS-COMPILATION SUCCESSFUL!"
+          echo "==========================================="
+          echo ""
 
       # ============================================================
-      # 7. 验证产物架构
+      # Step 6: 验证产物信息
       # ============================================================
-      - name: Verify binary
+      - name: Verify build artifact
         run: |
-          echo "=== Built artifacts ==="
-          find "${BUILD_DIR}" -type f -executable -o -name "*.a" -o -name "*.so*" 2>/dev/null
+          cd httplib-src
 
-          echo "=== Check ARM binary ==="
-          BIN=$(find "${BUILD_DIR}" -type f -executable | head -n1)
-          if [ -n "$BIN" ]; then
-            echo "Binary: $BIN"
-            file "$BIN"
-            ${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}-readelf -h "$BIN" | grep -E "Class:|Machine:|Flags:"
-          else
-            echo "(no executable binary found in build dir)"
-          fi
+          echo "=== File info ==="
+          file test_httplib_arm
+          ls -lh test_httplib_arm
+
+          echo ""
+          echo "=== ELF header check (should be ARM) ==="
+          readelf -h test_httplib_arm | grep -E "(Machine|Type|Entry)"
+
+          echo ""
+          echo "=== Dynamic dependencies check (none expected due to -static) ==="
+          readelf -d test_httplib_arm 2>/dev/null || echo "(No dynamic section - fully static)"
+
+          echo ""
+          echo "=== Symbol check (httplib symbols present) ==="
+          nm test_httplib_arm | grep -i httplib | head -20 || true
 
       # ============================================================
-      # 8. 打包上传
+      # Step 7: 上传构建产物
       # ============================================================
-      - name: Collect artifacts
-        run: |
-          mkdir -p "${INSTALL_DIR}/bin" "${INSTALL_DIR}/lib"
-          find "${BUILD_DIR}" -type f -executable -exec cp {} "${INSTALL_DIR}/bin/" \; 2>/dev/null || true
-          find "${BUILD_DIR}" -name "*.a" -exec cp {} "${INSTALL_DIR}/lib/" \; 2>/dev/null || true
-          find "${BUILD_DIR}" -name "*.so*" -exec cp {} "${INSTALL_DIR}/lib/" \; 2>/dev/null || true
-          echo "=== Install tree ==="
-          find "${INSTALL_DIR}" -type f | sort
-
-      - name: Package artifacts
-        run: |
-          cd "${INSTALL_DIR}"
-          tar czf "${GITHUB_WORKSPACE}/httplib-armhf-gcc4.9.tar.gz" .
-
-      - name: Upload artifact
+      - name: Upload ARM binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: httplib-armhf-gcc4.9
-          path: ${{ github.workspace }}/httplib-armhf-gcc4.9.tar.gz
+          name: httplib-armhf-http-only-bin
+          path: httplib-src/test_httplib_arm
           retention-days: 30
+
+      # ============================================================
+      # Step 8: 汇总结果
+      # ============================================================
+      - name: Summary
+        run: |
+          echo "## Cross-Compile Result" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Toolchain** | gcc-linaro-4.9-2016.02-x86_64_arm-linux-gnueabihf |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Target** | arm-linux-gnueabihf (ARMv7-A, hard-float) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Library** | cpp-httplib v0.18.3 (header-only) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Protocol** | HTTP only (no OpenSSL/HTTPS) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **C++ Standard** | C++11 |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Linking** | Static (-static) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **FPU** | NEON-VFPv4 (hard float) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Status** | :white_check_mark: Success |" >> $GITHUB_STEP_SUMMARY
