@@ -57,6 +57,8 @@ jobs:
             -O2 \
             -o build/httplib_compile.o
 
+          mkdir -p build/armhf/lib
+
           arm-linux-gnueabihf-g++ -shared \
             -o build/armhf/lib/libhttplib.so \
             build/httplib_compile.o \
