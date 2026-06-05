@@ -120,7 +120,10 @@ jobs:
 
           # 确保目录存在
           sudo mkdir -p "${PREFIX}"
+
+          # OpenSSL 1.0.0 的 make depend 需要交叉编译器在 PATH 中
           export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
+
           echo "=== Configuring OpenSSL 1.0.0 for arm-linux-gnueabihf ==="
           # OpenSSL 1.0.x ./Configure 参数说明:
           #   linux-armv4       → ARMv4 以上目标 (ARM32)
@@ -142,7 +145,7 @@ jobs:
 
           echo "=== Building OpenSSL ==="
           make -j$(nproc) depend
-          make -j$(nproc)
+          make -j$(nproc) build_libs   # 只编译 libssl.a + libcrypto.a，跳过测试
 
           echo "=== Installing OpenSSL to sysroot ==="
           sudo make install  # 1.0.0 没有 install_sw，直接用 install
