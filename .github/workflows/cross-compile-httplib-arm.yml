@@ -145,8 +145,8 @@ jobs:
 
           echo "=== Building OpenSSL ==="
           make -j$(nproc) depend
-          # build_libs 仍会触发 apps，改用 build_crypto + build_ssl 只编译两个静态库
-          make -j$(nproc) build_crypto build_ssl
+          # 子 make 不继承 export PATH，必须显式传递
+          PATH="${TOOLCHAIN_DIR}/bin:${PATH}" make -j$(nproc) build_crypto build_ssl
 
           echo "=== Installing OpenSSL to sysroot ==="
           sudo make install  # 1.0.0 没有 install_sw，直接用 install
