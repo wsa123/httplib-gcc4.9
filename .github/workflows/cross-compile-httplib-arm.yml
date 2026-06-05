@@ -96,10 +96,67 @@ jobs:
 
       # ============================================================
       # 5. CMake 配置（仅 HTTP，不依赖 OpenSSL）
+      #    优先使用仓库根目录 CMakeLists.txt，否则自动生成最小工程
       # ============================================================
       - name: CMake configure
         run: |
-          cmake -S "${GITHUB_WORKSPACE}/examples" \
+          echo "=== Current repo structure ==="
+          ls -la "${GITHUB_WORKSPACE}"
+
+          # 如果仓库根目录没有 CMakeLists.txt，自动生成一个最小工程
+          if [ ! -f "${GITHUB_WORKSPACE}/CMakeLists.txt" ]; then
+            echo "No CMakeLists.txt found, generating auto-build project..."
+            SOURCE_DIR="${GITHUB_WORKSPACE}/_auto_build"
+            mkdir -p "${SOURCE_DIR}"
+
+            # 生成 CMakeLists.txt
+            cat > "${SOURCE_DIR}/CMakeLists.txt" << 'CMAKE_EOF'
+          cmake_minimum_required(VERSION 3.5)
+          project(httplib_example LANGUAGES CXX)
+
+          set(CMAKE_CXX_STANDARD 11)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+          # httplib header-only 库的位置
+          set(HTTPLIB_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/httplib")
+          if(NOT EXISTS "${HTTPLIB_INCLUDE}/httplib.h")
+            # 如果 third_party/httplib 不存在，从根目录尝试
+            set(HTTPLIB_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../httplib")
+          endif()
+          if(NOT EXISTS "${HTTPLIB_INCLUDE}/httplib.h")
+            message(FATAL_ERROR "httplib.h not found! Please add third_party/httplib/ to your repo.")
+          endif()
+
+          include_directories("${HTTPLIB_INCLUDE}")
+
+          add_executable(httplib_example main.cpp)
+          CMAKE_EOF
+
+            # 生成简化的 HTTP 示例
+            cat > "${SOURCE_DIR}/main.cpp" << 'CPP_EOF'
+          #define CPPHTTPLIB_OPENSSL_SUPPORT 0
+          #include "httplib.h"
+          #include <iostream>
+
+          int main() {
+              httplib::Server svr;
+
+              svr.Get("/", [](const httplib::Request&, httplib::Response& res) {
+                  res.set_content("Hello from ARM32 httplib server!", "text/plain");
+              });
+
+              std::cout << "httplib server starting on http://0.0.0.0:8080" << std::endl;
+              svr.listen("0.0.0.0", 8080);
+              return 0;
+          }
+          CPP_EOF
+
+            echo "Generated auto-build project at ${SOURCE_DIR}"
+          else
+            SOURCE_DIR="${GITHUB_WORKSPACE}"
+          fi
+
+          cmake -S "${SOURCE_DIR}" \
                 -B "${BUILD_DIR}" \
                 -G "Unix Makefiles" \
                 -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/toolchain-armhf.cmake" \
