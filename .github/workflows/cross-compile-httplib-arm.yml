@@ -145,7 +145,8 @@ jobs:
 
           echo "=== Building OpenSSL ==="
           make -j$(nproc) depend
-          make -j$(nproc) build_libs   # 只编译 libssl.a + libcrypto.a，跳过测试
+          # build_libs 仍会触发 apps，改用 build_crypto + build_ssl 只编译两个静态库
+          make -j$(nproc) build_crypto build_ssl
 
           echo "=== Installing OpenSSL to sysroot ==="
           sudo make install  # 1.0.0 没有 install_sw，直接用 install
